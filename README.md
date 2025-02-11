@@ -6,10 +6,10 @@
 
 <h2 align="center">GENERator: A Long-Context Generative Genomic Foundation Model</h2>
 
-## 📰News
+## 📰 News
 * 🤗 **[2025-02-11]** We are pleased to announce that our models `GENERator-eukaryote-1.2b-base`, `GENERator-eukaryote-3b-base` are now available on [Hugging Face](https://huggingface.co/GenerTeam/)!
 
-## 🔭Overview
+## 🔭 Overview
 ![overview](figures/model_overview.png)
 
 In this repository, we present GENERator, a collection of generative genomic foundation models utilizing the transformer decoder architecture, trained on expansive DNA datasets derived from the [RefSeq database](https://www.ncbi.nlm.nih.gov/refseq/). Our evaluations demonstrate that the GENERator consistently achieves state-of-the-art performance across a wide spectrum of benchmarks, including [Genomic Benchmarks](https://huggingface.co/datasets/katielink/genomic-benchmarks/tree/main), [NT tasks](https://huggingface.co/datasets/InstaDeepAI/nucleotide_transformer_downstream_tasks_revised), and our newly proposed [Gener tasks](https://huggingface.co/GenerTeam). 
@@ -28,14 +28,14 @@ In this repository, you will find the following model checkpoints:
 | `GENERator-prokaryote-1.2b-base` | 3B   | 715B | Prokaryote+Virus            | Coming soon |
 | `GENERator-unified-7b-base`      | 7B   | 1101B | Eukaryote+Prokaryote+Virus | Awaiting sponsorship |
 
-## 📈Benchmark Performance
+## 📈 Benchmark Performance
 ![benchmark](figures/benchmarks.png)
 
-## 🎯Quick Start
+## 🎯 Quick Start
 coming soon...
 
-## 📚Datasets
+## 📚 Datasets
 coming soon...
 
-## 📜Citation
+## 📜 Citation
 TBD
