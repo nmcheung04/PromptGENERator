@@ -20,13 +20,13 @@ For more technical details, please refer to our paper on [arXiv](https://hugging
 
 In this repository, you will find the following model checkpoints:
 
-| Model Name | Parameters | Data | Category | Status |
-|:----------:|:----------:|:----------:|:----------:|:----------:|
-| `GENERator-eukaryote-1.2b-base`    | 1.2B | 386B | Eukaryote                   | [Available](https://huggingface.co/GenerTeam) |
-| `GENERator-eukaryote-3b-base`      | 3B   | 386B | Eukaryote                   | [Available](https://huggingface.co/GenerTeam) |
-| `GENERator-prokaryote-1.2b-base`   | 1.2B | 715B | Prokaryote+Virus            | Coming soon |
-| `GENERator-prokaryote-1.2b-base`   | 3B   | 715B | Prokaryote+Virus            | Coming soon |
-| `GENERator-unified-7b-base`        | 7B   | 1101B | Eukaryote+Prokaryote+Virus | Awaiting sponsorship |
+| Model Name                       | Parameters | Data | Category | Status |
+|----------------------------------|:----------:|:----------:|:----------:|:----------:|
+| `GENERator-eukaryote-1.2b-base`  | 1.2B | 386B | Eukaryote                   | [Available](https://huggingface.co/GenerTeam) |
+| `GENERator-eukaryote-3b-base`    | 3B   | 386B | Eukaryote                   | [Available](https://huggingface.co/GenerTeam) |
+| `GENERator-prokaryote-1.2b-base` | 1.2B | 715B | Prokaryote+Virus            | Coming soon |
+| `GENERator-prokaryote-1.2b-base` | 3B   | 715B | Prokaryote+Virus            | Coming soon |
+| `GENERator-unified-7b-base`      | 7B   | 1101B | Eukaryote+Prokaryote+Virus | Awaiting sponsorship |
 
 ## 📈Benchmark Performance
 ![benchmark](figures/benchmarks.png)
