@@ -1,7 +1,10 @@
+<p style="text-align: center">
+  <picture>
+    <img alt="Gener" src="figures/logo.jpg" style="width: 50%">
+  </picture>
+</p>
+
 <h2 align="center">GENERator: A Long-Context Generative Genomic Foundation Model</h2>
-
-![logo](figures/logo.jpg)
-
 ## 📰News
 * 🤗 **[2025-02-11]** We are pleased to announce that our models `GENERator-eukaryote-1.2b-base`, `GENERator-eukaryote-3b-base` are now available on [Hugging Face](https://huggingface.co/GenerTeam/)!
 
