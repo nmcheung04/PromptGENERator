@@ -38,4 +38,14 @@ coming soon...
 coming soon...
 
 ## 📜 Citation
-TBD
+```
+@misc{wu2025generator,
+      title={GENERator: A Long-Context Generative Genomic Foundation Model}, 
+      author={Wei Wu and Qiuyi Li and Mingyang Li and Kun Fu and Fuli Feng and Jieping Ye and Hui Xiong and Zheng Wang},
+      year={2025},
+      eprint={2502.07272},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2502.07272}, 
+}
+```
