@@ -4,7 +4,7 @@
   </picture>
 </p>
 
-<h2 align="center">GENERator: A Long-Context Generative Genomic Foundation Model</h2>
+<h1 align="center">GENERator: A Long-Context Generative Genomic Foundation Model</h1>
 
 ## 📰 News
 * 🤗 **[2025-02-11]** We are pleased to announce that our models `GENERator-eukaryote-1.2b-base`, `GENERator-eukaryote-3b-base` are now available on [Hugging Face](https://huggingface.co/GenerTeam/)!
