@@ -8,6 +8,7 @@
 
 ## 📰 News
 * 🤗 **[2025-02-11]** We are pleased to announce that our models `GENERator-eukaryote-1.2b-base`, `GENERator-eukaryote-3b-base` are now available on [Hugging Face](https://huggingface.co/GenerTeam/)!
+* 📑 **[2025-02-12]** Our paper has been made publicly available on [arXiv](https://arxiv.org/abs/2502.07272)!
 
 ## 🔭 Overview
 ![overview](figures/model_overview.png)
