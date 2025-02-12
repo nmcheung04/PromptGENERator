@@ -16,7 +16,7 @@ In this repository, we present GENERator, a collection of generative genomic fou
 
 Beyond benchmark performance, the GENERator adheres to the central dogma of molecular biology, accurately generating protein-coding DNA sequences that produce proteins structurally analogous to known families. Moreover, the GENERator showcases significant promise in sequence optimization, particularly in the design of promoter sequences that regulate gene activity during various biological stages, highlighting its potential for a series of biologically significant tasks. Our findings position the GENERator as a vital resource for genomic research and biotechnological advancement. By enhancing our capability to interpret and predict genomic sequences, the GENERator paves the way for profound improvements in our understanding of complex biological systems and the development of precise genomic interventions.
 
-For more technical details, please refer to our paper on [arXiv](https://huggingface.co/GenerTeam). 
+For more technical details, please refer to our paper on [arXiv](https://arxiv.org/abs/2502.07272). 
 
 In this repository, you will find the following model checkpoints:
 
