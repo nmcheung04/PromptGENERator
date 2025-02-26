@@ -31,7 +31,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--hg38_path",
         type=str,
-        default="hf://datasets/GenerTeam/hg38/train.parquet",
+        default="hf://datasets/GenerTeam/hg38/test.parquet",
         help="Path to hg38 reference genome parquet file",
     )
     parser.add_argument(
@@ -123,9 +123,6 @@ def load_and_prepare_data(
     start_time = time.time()
     seq_df = pd.read_parquet(hg38_path)
     clinvar_df = pd.read_parquet(clinvar_path)
-    clinvar_df = clinvar_df.loc[
-        clinvar_df["chrom"] != "Y"
-    ]  # This line can be removed if Y chromosome is included
 
     print(f"📊 Loaded {len(clinvar_df)} ClinVar variants")
     print(f"⚡ Data loading completed in {time.time() - start_time:.2f} seconds")
