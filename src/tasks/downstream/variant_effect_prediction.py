@@ -64,7 +64,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--output_path",
         type=str,
-        default="result/variant_predictions.parquet",
+        default="results/variant_predictions.parquet",
         help="Path to save the output predictions",
     )
     parser.add_argument(
@@ -177,7 +177,10 @@ def setup_model(
     start_time = time.time()
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(model_name).half()
+    dtype = "bfloat16" if torch.cuda.get_device_capability()[0] >= 8 else "float32"
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name, torch_dtype=dtype, trust_remote_code=True
+    )
 
     # Check available GPUs
     if torch.cuda.is_available():
