@@ -83,6 +83,55 @@ python src/tasks/downstream/variant_effect_prediction.py
 python src/tasks/downstream/variant_effect_prediction.py --dp_size ${NUM_GPUS}
 ```
 
+#### Sequence Understanding (Classification/Regression)
+To run the sequence understanding task on [Gener Tasks](https://huggingface.co/datasets/GenerTeam/gener-tasks), [NT Tasks](https://huggingface.co/datasets/InstaDeepAI/nucleotide_transformer_downstream_tasks_revised), [Genomic Benchmarks](https://huggingface.co/katarinagresova), [DeepSTARR Enhancer Activity](https://huggingface.co/datasets/GenerTeam/DeepSTARR-enhancer-activity), you can use the following arguments:
+
+
+* Gener Tasks
+  * `--dataset_name GenerTeam/gener-tasks`
+  * `--subset_name gene_classification` or `--subset_name taxonomic_classification`
+* NT Tasks
+  * `--dataset_name InstaDeepAI/nucleotide_transformer_downstream_tasks_revised`
+  * `--subset_name H2AFZ` or `--subset_name H3K27ac` or ...
+* Genomic Benchmarks
+  * `--dataset_name katarinagresova/Genomic_Benchmarks_demo_human_or_worm` or `--dataset_name katarinagresova/Genomic_Benchmarks_human_ocr_ensembl` or ...
+* DeepSTARR Enhancer Activity
+  * `--dataset_name GenerTeam/DeepSTARR-enhancer-activity`
+  * `--problem_type regression`
+
+on following command:
+
+```shell
+# Using single GPU
+python src/tasks/downstream/sequence_understanding.py \
+    --model_name GenerTeam/GENERator-eukaryote-1.2b-base \
+    --dataset_name ${DATASET_NAME} \
+    --subset_name ${SUBSET_NAME} \
+    --batch_size ${BATCH_SIZE} \
+    --problem_type ${PROBLEM_TYPE} \
+    --main_metrics ${MAIN_METRICS}
+
+# Using multiple GPUs on single node (DDP)
+torchrun --nnodes=1 \
+    --nproc_per_node=${NUM_GPUS} \
+    --rdzv_backend=c10d \
+    src/tasks/downstream/sequence_understanding.py
+
+# Using multiple GPUs on multiple nodes (DDP)
+torchrun --nnodes=${NUM_NODES} \
+    --nproc_per_node=${NUM_GPUS_PER_NODE} \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+    src/tasks/downstream/sequence_understanding.py
+
+# Using DeepSpeed or Full Sharded Data Parallel (FSDP)
+torchrun --nnodes=${NUM_NODES} \
+    --nproc_per_node=${NUM_GPUS_PER_NODE} \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+    src/tasks/downstream/sequence_understanding.py \
+    --distributed_type deepspeed # or fsdp
+```
 ## 📚 Datasets
 
 * [Gener Tasks](https://huggingface.co/datasets/GenerTeam/gener-tasks)
