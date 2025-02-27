@@ -1,10 +1,14 @@
-<p align="center">
+![image](https://github.com/user-attachments/assets/5dbc8be4-4580-4735-b62c-e7b5c5fafef6)<p align="center">
   <picture>
     <img alt="Gener" src="figures/logo.png" width=50%>
   </picture>
 </p>
 
 <h1 align="center">GENERator: A Long-Context Generative Genomic Foundation Model</h1>
+
+## ⚠️ Important Notice
+ 
+An issue was identified in the initial release of [`GENERator-eukaryote-1.2b-base`](https://huggingface.co/GenerTeam/GENERator-eukaryote-1.2b-base), likely caused by an unstable internet connection during upload. If you downloaded the model before **February 26, 2025**, please re-download it to ensure optimal and reliable performance.
 
 ## 📰 News
 
