@@ -268,7 +268,7 @@ def compute_logits(
                 ]  # -2 because of the EOS token
 
             # Apply softmax to get probabilities
-            probs = F.softmax(last_token_logits, dim=0).cpu().numpy().tolist()
+            probs = F.softmax(last_token_logits, dim=0).cpu().float().numpy().tolist()
             all_logits.append(probs)
 
     print(f"✅ Logit computation completed in {time.time() - start_time:.2f} seconds")
