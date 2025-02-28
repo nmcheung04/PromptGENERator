@@ -1,6 +1,6 @@
 # evaluation
 do_eval: true
-evaluation_strategy: "epoch"
+eval_strategy: "epoch"
 load_best_model_at_end: true
 
 # saving
@@ -20,6 +20,8 @@ lr_scheduler_kwargs: {
   "factor": 0.5,
   "mode": null,
 }
+adam_beta1: 0.9
+adam_beta2: 0.995
 gradient_checkpointing: True
 gradient_checkpointing_kwargs: { "use_reentrant": False }
 

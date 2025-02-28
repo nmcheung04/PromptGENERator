@@ -6,6 +6,8 @@ from typing import Dict, Tuple, Union, Optional, Callable
 import numpy as np
 import torch
 import torch.distributed as dist
+import transformers
+import yaml
 from datasets import (
     Dataset,
     load_dataset,
@@ -23,10 +25,13 @@ from transformers import (
     Trainer,
     EarlyStoppingCallback,
     DataCollatorWithPadding,
-    HfArgumentParser,
     PreTrainedModel,
 )
 
+# Set logging level for transformers
+transformers.logging.set_verbosity_info()
+
+# Define optimization direction for each metric (whether higher or lower is better)
 METRICS_DIRECTION: Dict[str, str] = {
     "accuracy": "max",
     "f1_score": "max",
@@ -55,6 +60,7 @@ def is_main_process() -> bool:
 def dist_print(*args, **kwargs) -> None:
     """
     Print only from the main process (rank 0) in distributed training.
+    Prevents duplicate outputs in multi-GPU settings.
 
     Args:
         *args: Arguments to pass to print function
@@ -116,6 +122,7 @@ def parse_arguments() -> argparse.Namespace:
         type=str,
         default="right",
         choices=["right", "left"],
+        help="Which side to apply padding and truncation",
     )
     parser.add_argument(
         "--learning_rate", type=float, default=1e-5, help="Learning rate for training"
@@ -180,7 +187,7 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_and_prepare_data(
+def setup_dataset(
     dataset_name: str,
     subset_name: Optional[str] = None,
     tokenizer: Optional[PreTrainedTokenizer] = None,
@@ -194,7 +201,7 @@ def load_and_prepare_data(
     Load and prepare dataset for sequence understanding.
 
     Args:
-        dataset_name: Name of the dataset on HuggingFace
+        dataset_name: Name of the dataset on HuggingFace Hub
         subset_name: Name of the dataset subset (if applicable)
         tokenizer: Tokenizer for the model
         max_length: Maximum sequence length for tokenization
@@ -216,12 +223,20 @@ def load_and_prepare_data(
         dataset = load_dataset(dataset_name, subset_name, trust_remote_code=True)
     dist_print(f"⚡ Dataset loaded in {time.time() - start_time:.2f} seconds")
 
+    # Determine number of labels based on problem type
     if problem_type == "single_label_classification":
+        assert isinstance(
+            dataset["train"]["label"][0], int
+        ), "Label must be an integer for single-label classification"
         max_label = max(dataset["train"]["label"])
         num_labels = max_label + 1
     elif problem_type == "multi_label_classification":
-        assert isinstance(dataset["train"]["label"][0], list)
-        assert isinstance(dataset["train"]["label"][0][0], float)
+        assert isinstance(
+            dataset["train"]["label"][0], list
+        ), "Label must be a list for multi-label classification"
+        assert isinstance(
+            dataset["train"]["label"][0][0], float
+        ), "Label values must be floats for multi-label classification"
         num_labels = len(dataset["train"]["label"][0])
     elif problem_type == "regression":
         if isinstance(dataset["train"]["label"][0], list):
@@ -237,6 +252,7 @@ def load_and_prepare_data(
 
     assert num_labels is not None, "Number of labels could not be determined."
 
+    # Create validation split if not present in the dataset
     if not any(x in dataset for x in ["validation", "valid", "val"]):
         # No validation set, split train into train and validation
         assert (
@@ -258,21 +274,37 @@ def load_and_prepare_data(
         dataset["validation"] = dataset["train"].select(valid_idx)
         dataset["train"] = dataset["train"].select(train_idx)
 
-    # Process dataset
+    # Process dataset with tokenizer
     def _process_function(examples):
+        # Find the correct field containing the sequence
+        if "sequence" in examples:
+            sequences = examples["sequence"]
+        elif "seq" in examples:
+            sequences = examples["seq"]
+        elif "text" in examples:
+            sequences = examples["text"]
+        else:
+            raise ValueError(
+                "No sequence column found in dataset. Expected 'sequence', 'seq', or 'text'."
+            )
+
+        # Tokenize sequences
         tokenized = tokenizer(
-            examples["sequence"],
+            sequences,
             truncation=True,
             max_length=max_length,
             add_special_tokens=True,
             padding=False,
         )
+
+        # Create attention masks manually
         tokenized["attention_mask"] = [
             [1] * len(input_id) for input_id in tokenized["input_ids"]
         ]
         tokenized["label"] = examples["label"]
         return tokenized
 
+    # Apply tokenization to dataset
     dataset = dataset.map(
         _process_function,
         batched=True,
@@ -290,22 +322,28 @@ def setup_tokenizer(
     model_name: str, padding_and_truncation_side: str
 ) -> PreTrainedTokenizer:
     """
-    Load tokenizer for sequence understanding.
+    Load and configure tokenizer for sequence understanding.
 
     Args:
         model_name: Name or path of the HuggingFace model
         padding_and_truncation_side: Side for padding and truncation (left or right)
 
     Returns:
-        PreTrainedTokenizer: Tokenizer for the model
+        PreTrainedTokenizer: Configured tokenizer for the model
     """
     dist_print(f"🔤 Loading tokenizer from: {model_name}")
     start_time = time.time()
 
+    # Load tokenizer with trust_remote_code to support custom models
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
+    # Configure padding and truncation settings
     tokenizer.padding_side = padding_and_truncation_side
     tokenizer.truncation_side = padding_and_truncation_side
-    tokenizer.pad_token = tokenizer.eos_token
+
+    # Set pad_token to eos_token if not defined
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     dist_print(
         f"⏱️ Tokenizer loading completed in {time.time() - start_time:.2f} seconds"
@@ -316,30 +354,34 @@ def setup_tokenizer(
 
 def setup_model(model_name: str, problem_type: str, num_labels: int) -> PreTrainedModel:
     """
-    Load model for sequence understanding.
+    Load and configure model for sequence understanding.
 
     Args:
         model_name: Name or path of the HuggingFace model
-        problem_type: Type of problem (classification or regression)
+        problem_type: Type of problem
         num_labels: Number of labels for the task
 
     Returns:
-        PreTrainedModel: Pre-trained model for sequence classification
+        PreTrainedModel: Configured pre-trained model for sequence classification
     """
     dist_print(
         f"🤗 Loading AutoModelForSequenceClassification from: {model_name} with {num_labels} labels"
     )
     start_time = time.time()
 
+    # Load model with appropriate problem type and label configuration
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
         num_labels=num_labels,
         problem_type=problem_type,
         trust_remote_code=True,
     )
-    model.config.pad_token_id = model.config.eos_token_id
 
-    # Check model size
+    # Ensure pad_token_id is set
+    if model.config.pad_token_id is None:
+        model.config.pad_token_id = model.config.eos_token_id
+
+    # Report model size for reference
     total_params = sum(p.numel() for p in model.parameters())
     dist_print(f"📊 Model size: {total_params / 1e6:.1f}M parameters")
     dist_print(f"⏱️ Model loading completed in {time.time() - start_time:.2f} seconds")
@@ -360,6 +402,15 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
     """
 
     def _compute_metrics_single_label_classification(eval_pred):
+        """
+        Compute metrics for single-label classification.
+
+        Args:
+            eval_pred: Tuple of (logits, labels)
+
+        Returns:
+            Dict of metrics: accuracy, F1 score, and Matthews correlation coefficient
+        """
         logits, labels = eval_pred
         predictions = np.argmax(logits, axis=-1)
 
@@ -370,6 +421,15 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
         return {"accuracy": accuracy, "f1_score": f1, "mcc": mcc}
 
     def _compute_metrics_multi_label_classification(eval_pred):
+        """
+        Compute metrics for multi-label classification.
+
+        Args:
+            eval_pred: Tuple of (predictions, labels)
+
+        Returns:
+            Dict of metrics: F1 max and area under precision-recall curve
+        """
         predictions, labels = eval_pred
 
         return {
@@ -381,10 +441,20 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
         }
 
     def _compute_metrics_regression(eval_pred):
+        """
+        Compute metrics for regression tasks.
+
+        Args:
+            eval_pred: Tuple of (predictions, labels)
+
+        Returns:
+            Dict of metrics: MSE, MAE, R², Pearson correlation, both per dimension and overall
+        """
         logits, labels = eval_pred
         predictions = logits.squeeze()
         labels = labels.squeeze()
 
+        # Reshape if needed
         if predictions.ndim == 1:
             predictions = predictions.reshape(-1, num_labels)
         if labels.ndim == 1:
@@ -392,6 +462,7 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
 
         results = {}
 
+        # Calculate metrics per dimension if multi-dimensional
         if num_labels > 1:
             label_names = [f"label_{i}" for i in range(num_labels)]
 
@@ -423,6 +494,7 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
                 pearson = numerator / denominator if denominator != 0 else float("nan")
                 results[f"pearson_{label}"] = pearson
 
+        # Calculate overall metrics across all dimensions
         total_mse = np.mean((predictions - labels) ** 2)
         total_mae = np.mean(np.abs(predictions - labels))
         total_y_mean = np.mean(labels)
@@ -454,11 +526,14 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
 
     def area_under_prc(pred, target):
         """
-        Area under precision-recall curve (PRC).
+        Calculate area under precision-recall curve (PRC).
 
-        Parameters:
-            pred (Tensor): predictions of shape :math:`(n,)`
-            target (Tensor): binary targets of shape :math:`(n,)`
+        Args:
+            pred (Tensor): predictions of shape (n,)
+            target (Tensor): binary targets of shape (n,)
+
+        Returns:
+            float: Area under the precision-recall curve
         """
         order = pred.argsort(descending=True)
         target = target[order]
@@ -470,14 +545,17 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
 
     def f1_max(pred, target):
         """
-        F1 score with the optimal threshold.
+        Calculate F1 score with the optimal threshold.
 
-        This function first enumerates all possible thresholds for deciding positive and negative
-        samples, and then pick the threshold with the maximal F1 score.
+        This function enumerates all possible thresholds for deciding positive and negative
+        samples, and picks the threshold with the maximal F1 score.
 
-        Parameters:
-            pred (Tensor): predictions of shape :math:`(B, N)`
-            target (Tensor): binary targets of shape :math:`(B, N)`
+        Args:
+            pred (Tensor): predictions of shape (B, N)
+            target (Tensor): binary targets of shape (B, N)
+
+        Returns:
+            float: Maximum achievable F1 score across all thresholds
         """
         order = pred.argsort(descending=True, dim=1)
         target = target.gather(1, order)
@@ -511,6 +589,7 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
         all_f1 = 2 * all_precision * all_recall / (all_precision + all_recall + 1e-10)
         return all_f1.max()
 
+    # Return the appropriate metrics function based on problem type
     if problem_type == "single_label_classification":
         return _compute_metrics_single_label_classification
     elif problem_type == "multi_label_classification":
@@ -519,6 +598,107 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
         return _compute_metrics_regression
     else:
         raise ValueError(f"Unknown problem type: {problem_type}")
+
+
+def setup_training_args(yaml_path=None, cli_args=None, **kwargs):
+    """
+    Create a TrainingArguments instance from YAML, CLI arguments, and code arguments.
+    Priority: code kwargs > CLI args > YAML config
+
+    Args:
+        yaml_path: Path to YAML configuration file
+        cli_args: Parsed command line arguments
+        **kwargs: Direct arguments that take highest priority
+
+    Returns:
+        TrainingArguments: Configured training arguments
+    """
+    # Start with yaml configuration if provided
+    yaml_kwargs = {}
+    if yaml_path and os.path.exists(yaml_path):
+        with open(yaml_path, "r") as f:
+            yaml_kwargs = yaml.safe_load(f)
+
+    # Create a dictionary from CLI arguments
+    cli_kwargs = {}
+    if cli_args is not None:
+        # Add basic training parameters
+        if hasattr(cli_args, "output_dir"):
+            cli_kwargs["output_dir"] = cli_args.output_dir
+        if hasattr(cli_args, "batch_size"):
+            cli_kwargs["per_device_train_batch_size"] = cli_args.batch_size
+            cli_kwargs["per_device_eval_batch_size"] = cli_args.batch_size
+        if hasattr(cli_args, "learning_rate"):
+            cli_kwargs["learning_rate"] = cli_args.learning_rate
+        if hasattr(cli_args, "gradient_accumulation_steps"):
+            cli_kwargs["gradient_accumulation_steps"] = (
+                cli_args.gradient_accumulation_steps
+            )
+        if hasattr(cli_args, "seed"):
+            cli_kwargs["seed"] = cli_args.seed
+            cli_kwargs["data_seed"] = cli_args.seed
+
+        # Handle distributed training configurations
+        if hasattr(cli_args, "distributed_type"):
+            if cli_args.distributed_type == "deepspeed":
+                cli_kwargs["deepspeed"] = "configs/ds_configs/zero1.json"
+            elif cli_args.distributed_type == "fsdp":
+                cli_kwargs["fsdp"] = "shard_grad_op auto_wrap"
+                cli_kwargs["fsdp_config"] = "configs/ds_configs/fsdp.json"
+
+    # Handle BF16 precision based on GPU capability
+    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
+        cli_kwargs["bf16"] = True
+
+    # Check the main metrics
+    if cli_args.problem_type == "regression":
+        if cli_args.main_metrics not in ["mse", "mae", "r2", "pearson"]:
+            dist_print(
+                f"⚠️ Warning: {cli_args.main_metrics} is not a valid metric for regression. Defaulting to 'mse'."
+            )
+            cli_args.main_metrics = "mse"
+    elif cli_args.problem_type == "single_label_classification":
+        if cli_args.main_metrics not in ["accuracy", "f1_score", "mcc"]:
+            dist_print(
+                f"⚠️ Warning: {cli_kwargs['main_metrics']} is not a valid metric for single-label classification. Defaulting to 'mcc'."
+            )
+            cli_args.main_metrics = "mcc"
+    elif cli_args.problem_type == "multi_label_classification":
+        if cli_args.main_metrics not in ["f1_max", "auprc_micro"]:
+            dist_print(
+                f"⚠️ Warning: {cli_kwargs['main_metrics']} is not a valid metric for multi-label classification. Defaulting to 'f1_max'."
+            )
+            cli_args.main_metrics = "f1_max"
+    else:
+        raise ValueError(
+            f"Unknown problem type: {cli_args.problem_type}. Cannot determine main metrics."
+        )
+
+    # Handle metrics direction
+    if hasattr(cli_args, "main_metrics") and "METRICS_DIRECTION" in globals():
+        cli_kwargs["greater_is_better"] = (
+            METRICS_DIRECTION[cli_args.main_metrics] == "max"
+        )
+
+    # Update lr_scheduler_kwargs if needed
+    if (
+        "lr_scheduler_kwargs" in yaml_kwargs
+        and hasattr(cli_args, "main_metrics")
+        and "METRICS_DIRECTION" in globals()
+    ):
+        if (
+            isinstance(yaml_kwargs["lr_scheduler_kwargs"], dict)
+            and "mode" in yaml_kwargs["lr_scheduler_kwargs"]
+        ):
+            yaml_kwargs["lr_scheduler_kwargs"]["mode"] = METRICS_DIRECTION[
+                cli_args.main_metrics
+            ]
+
+    # Merge all configurations, with priority: kwargs > cli_kwargs > yaml_kwargs
+    final_kwargs = {**yaml_kwargs, **cli_kwargs, **kwargs}
+
+    # Create and return the TrainingArguments instance
+    return TrainingArguments(**final_kwargs)
 
 
 def train_model(
@@ -542,28 +722,8 @@ def train_model(
     dist_print("🚀 Setting up training...")
     start_time = time.time()
 
-    # Load default training arguments
-    parser = HfArgumentParser([TrainingArguments])
-    training_args = parser.parse_yaml_file(args.hf_config_path, True)[0]
-    training_args.output_dir = args.output_dir
-    training_args.per_device_train_batch_size = args.batch_size
-    training_args.per_device_eval_batch_size = args.batch_size
-    training_args.learning_rate = args.learning_rate
-    training_args.gradient_accumulation_steps = args.gradient_accumulation_steps
-    training_args.greater_is_better = METRICS_DIRECTION[args.main_metrics] == "max"
-    training_args.seed = training_args.data_seed = args.seed
-    if "mode" in training_args.lr_scheduler_kwargs:
-        training_args.lr_scheduler_kwargs["mode"] = METRICS_DIRECTION[args.main_metrics]
-    if args.distributed_type == "deepspeed":
-        training_args.deepspeed = "configs/ds_configs/zero1.json"
-    if args.distributed_type == "fsdp":
-        training_args.fsdp = "shard_grad_op auto_wrap"
-        training_args.fsdp_config = "configs/ds_configs/fsdp.json"
-    if torch.cuda.get_device_capability()[0] >= 8:
-        training_args.bf16 = True
-    else:
-        # Some models will be overflow when using fp16 (using fp32)
-        pass
+    # Configure training arguments
+    training_args = setup_training_args(yaml_path=args.hf_config_path, cli_args=args)
 
     # Setup early stopping callback
     early_stopping_callback = EarlyStoppingCallback(
@@ -678,7 +838,7 @@ def main() -> None:
     tokenizer = setup_tokenizer(args.model_name, args.padding_and_truncation_side)
 
     # Load and prepare data
-    datasets, num_labels = load_and_prepare_data(
+    datasets, num_labels = setup_dataset(
         args.dataset_name,
         args.subset_name,
         tokenizer,
