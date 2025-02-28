@@ -7,8 +7,11 @@
 <h1 align="center">GENERator: A Long-Context Generative Genomic Foundation Model</h1>
 
 ## ⚠️ Important Notice
- 
-An issue was identified in the initial release of [`GENERator-eukaryote-1.2b-base`](https://huggingface.co/GenerTeam/GENERator-eukaryote-1.2b-base), likely caused by an unstable internet connection during upload. If you downloaded the model before **February 26, 2025**, please re-download it to ensure optimal and reliable performance.
+
+An issue was identified in the initial release of [
+`GENERator-eukaryote-1.2b-base`](https://huggingface.co/GenerTeam/GENERator-eukaryote-1.2b-base), likely caused by an
+unstable internet connection during upload. If you downloaded the model before **February 26, 2025**, please re-download
+it to ensure optimal and reliable performance.
 
 ## 📰 News
 
@@ -88,20 +91,23 @@ python src/tasks/downstream/variant_effect_prediction.py --dp_size ${NUM_GPUS}
 ```
 
 #### Sequence Understanding (Classification/Regression)
-To run the sequence understanding task on [Gener Tasks](https://huggingface.co/datasets/GenerTeam/gener-tasks), [NT Tasks](https://huggingface.co/datasets/InstaDeepAI/nucleotide_transformer_downstream_tasks_revised), [Genomic Benchmarks](https://huggingface.co/katarinagresova), [DeepSTARR Enhancer Activity](https://huggingface.co/datasets/GenerTeam/DeepSTARR-enhancer-activity), you can use the following arguments:
 
+To run the sequence understanding task
+on [Gener Tasks](https://huggingface.co/datasets/GenerTeam/gener-tasks), [NT Tasks](https://huggingface.co/datasets/InstaDeepAI/nucleotide_transformer_downstream_tasks_revised), [Genomic Benchmarks](https://huggingface.co/katarinagresova), [DeepSTARR Enhancer](https://huggingface.co/datasets/GenerTeam/DeepSTARR-enhancer-activity),
+you can use the following arguments:
 
 * Gener Tasks
-  * `--dataset_name GenerTeam/gener-tasks`
-  * `--subset_name gene_classification` or `--subset_name taxonomic_classification`
+    * `--dataset_name GenerTeam/gener-tasks`
+    * `--subset_name gene_classification` or `--subset_name taxonomic_classification`
 * NT Tasks
-  * `--dataset_name InstaDeepAI/nucleotide_transformer_downstream_tasks_revised`
-  * `--subset_name H2AFZ` or `--subset_name H3K27ac` or ...
+    * `--dataset_name InstaDeepAI/nucleotide_transformer_downstream_tasks_revised`
+    * `--subset_name H2AFZ` or `--subset_name H3K27ac` or ...
 * Genomic Benchmarks
-  * `--dataset_name katarinagresova/Genomic_Benchmarks_demo_human_or_worm` or `--dataset_name katarinagresova/Genomic_Benchmarks_human_ocr_ensembl` or ...
+    * `--dataset_name katarinagresova/Genomic_Benchmarks_demo_human_or_worm` or
+      `--dataset_name katarinagresova/Genomic_Benchmarks_human_ocr_ensembl` or ...
 * DeepSTARR Enhancer Activity
-  * `--dataset_name GenerTeam/DeepSTARR-enhancer-activity`
-  * `--problem_type regression`
+    * `--dataset_name GenerTeam/DeepSTARR-enhancer-activity`
+    * `--problem_type regression`
 
 on following command:
 
@@ -136,6 +142,43 @@ torchrun --nnodes=${NUM_NODES} \
     src/tasks/downstream/sequence_understanding.py \
     --distributed_type deepspeed # or fsdp
 ```
+
+#### Causal Language Modeling Fine-tuning
+
+For causal language modeling fine-tuning
+on [DeepSTARR Enhancer](https://huggingface.co/datasets/GenerTeam/DeepSTARR-enhancer-activity), [Histone coding DNA sequence (CDS)](https://huggingface.co/datasets/GenerTeam/histone-cds), [Cytochrome P450 CDS](https://huggingface.co/datasets/GenerTeam/cytochrome-p450-cds)
+you can use the following command:
+
+```shell
+# Using single GPU
+python src/tasks/downstream/fine_tuning.py \
+    --model_name GenerTeam/GENERator-eukaryote-1.2b-base \
+    --dataset_name ${DATASET_NAME} \
+    --batch_size ${BATCH_SIZE} \
+    --num_train_epochs ${NUM_EPOCHS}
+
+# Using multiple GPUs on single node (DDP)
+torchrun --nnodes=1 \
+    --nproc_per_node=${NUM_GPUS} \
+    --rdzv_backend=c10d \
+    src/tasks/downstream/fine_tuning.py
+
+# Using multiple GPUs on multiple nodes (DDP)
+torchrun --nnodes=${NUM_NODES} \
+    --nproc_per_node=${NUM_GPUS_PER_NODE} \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+    src/tasks/downstream/fine_tuning.py
+
+# Using DeepSpeed or Full Sharded Data Parallel (FSDP)
+torchrun --nnodes=${NUM_NODES} \
+    --nproc_per_node=${NUM_GPUS_PER_NODE} \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+    src/tasks/downstream/fine_tuning.py \
+    --distributed_type deepspeed # or fsdp
+```
+
 ## 📚 Datasets
 
 * [Gener Tasks](https://huggingface.co/datasets/GenerTeam/gener-tasks)
