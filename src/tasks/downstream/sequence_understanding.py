@@ -174,7 +174,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--hf_config_path",
         type=str,
-        default="configs/hf_configs/downstream.yaml",
+        default="configs/hf_configs/sequence_understanding.yaml",
         help="Path to the YAML configuration file for HuggingFace Trainer",
     )
     parser.add_argument(
@@ -281,11 +281,15 @@ def setup_dataset(
             sequences = examples["sequence"]
         elif "seq" in examples:
             sequences = examples["seq"]
+        elif "dna_sequence" in examples:
+            sequences = examples["dna_sequence"]
+        elif "dna_seq" in examples:
+            sequences = examples["dna_seq"]
         elif "text" in examples:
             sequences = examples["text"]
         else:
             raise ValueError(
-                "No sequence column found in dataset. Expected 'sequence', 'seq', or 'text'."
+                "No sequence column found in dataset. Expected 'sequence', 'seq', 'dna_sequence', 'dna_seq', or 'text'."
             )
 
         # Tokenize sequences
