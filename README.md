@@ -145,9 +145,7 @@ torchrun --nnodes=${NUM_NODES} \
 
 #### Causal Language Modeling Fine-tuning
 
-For causal language modeling fine-tuning
-on [DeepSTARR Enhancer](https://huggingface.co/datasets/GenerTeam/DeepSTARR-enhancer-activity), [Histone coding DNA sequence (CDS)](https://huggingface.co/datasets/GenerTeam/histone-cds), [Cytochrome P450 CDS](https://huggingface.co/datasets/GenerTeam/cytochrome-p450-cds)
-you can use the following command:
+You can use the following command to fine-tune the GENERator-base model for generating specific DNA sequences, such as [DeepSTARR Enhancer](https://huggingface.co/datasets/GenerTeam/DeepSTARR-enhancer-activity), [Histone coding DNA sequence (CDS)](https://huggingface.co/datasets/GenerTeam/histone-cds), [Cytochrome P450 CDS](https://huggingface.co/datasets/GenerTeam/cytochrome-p450-cds).
 
 ```shell
 # Using single GPU
