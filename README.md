@@ -32,8 +32,8 @@ and our newly proposed [Gener tasks](https://huggingface.co/GenerTeam).
 
 Beyond benchmark performance, the GENERator adheres to the central dogma of molecular biology, accurately generating
 protein-coding DNA sequences that produce proteins structurally analogous to known families. Moreover, the GENERator
-showcases significant promise in sequence optimization, particularly in the design of promoter sequences that regulate
-gene activity during various biological stages, highlighting its potential for a series of biologically significant
+showcases significant promise in sequence optimization, particularly in the design of enhancer sequences that regulate
+gene expression during various biological stages, highlighting its potential for a series of biologically significant
 tasks. Our findings position the GENERator as a vital resource for genomic research and biotechnological advancement. By
 enhancing our capability to interpret and predict genomic sequences, the GENERator paves the way for profound
 improvements in our understanding of complex biological systems and the development of precise genomic interventions.
