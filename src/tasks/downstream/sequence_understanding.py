@@ -26,6 +26,7 @@ from transformers import (
     EarlyStoppingCallback,
     DataCollatorWithPadding,
     PreTrainedModel,
+    AutoConfig,
 )
 
 # Set logging level for transformers
@@ -108,8 +109,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--max_length",
         type=int,
-        default=16384,
-        help="Maximum sequence length for tokenization",
+        default=16384,  # Default value
+        help="Maximum sequence length for tokenization. Length extension modes are enabled if > 16384 * 1.05 .",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -183,6 +184,15 @@ def parse_arguments() -> argparse.Namespace:
         default="ddp",
         choices=["ddp", "deepspeed", "fsdp"],
         help="Type of distributed training to use",
+    )
+
+    parser.add_argument(
+        "--length_extension_mode",
+        type=str,
+        default="yarn_rope_scaling",
+        choices=["yarn_rope_scaling", "sliding_window", "none"],
+        help="Mode for handling longer sequences when max_length > 16384 * 1.05. "
+        "'none' means no explicit extension method is applied from this script.",
     )
     return parser.parse_args()
 
@@ -315,8 +325,9 @@ def setup_dataset(
         remove_columns=[
             col
             for col in dataset["train"].column_names
-            if col not in ["input_ids", "label"]
+            if col not in ["input_ids", "attention_mask", "label"]
         ],
+        num_proc=16,
     )
 
     return dataset, num_labels
@@ -356,7 +367,13 @@ def setup_tokenizer(
     return tokenizer
 
 
-def setup_model(model_name: str, problem_type: str, num_labels: int) -> PreTrainedModel:
+def setup_model(
+    model_name: str,
+    problem_type: str,
+    num_labels: int,
+    max_length: Optional[int] = 16384,
+    length_extension_mode: Optional[str] = None,
+) -> PreTrainedModel:
     """
     Load and configure model for sequence understanding.
 
@@ -364,6 +381,7 @@ def setup_model(model_name: str, problem_type: str, num_labels: int) -> PreTrain
         model_name: Name or path of the HuggingFace model
         problem_type: Type of problem
         num_labels: Number of labels for the task
+        length_extension_mode: Mode for handling sequences longer than 16384 * 1.05 (if applicable)
 
     Returns:
         PreTrainedModel: Configured pre-trained model for sequence classification
@@ -373,12 +391,112 @@ def setup_model(model_name: str, problem_type: str, num_labels: int) -> PreTrain
     )
     start_time = time.time()
 
-    # Load model with appropriate problem type and label configuration
-    model = AutoModelForSequenceClassification.from_pretrained(
+    config = AutoConfig.from_pretrained(
         model_name,
         num_labels=num_labels,
         problem_type=problem_type,
         trust_remote_code=True,
+    )
+    attn_implementation = "sdpa"
+
+    # Apply length extension configurations if max_length > 16384
+    original_model_max_length_for_scaling = 16384.0  # Using float for division
+
+    if max_length > original_model_max_length_for_scaling * 1.05:
+        dist_print(
+            f"⚡️ Max_length ({max_length}) > {int(original_model_max_length_for_scaling)}. Enabling length extension mode: {length_extension_mode}"
+        )
+
+        if (
+            hasattr(config, "max_position_embeddings")
+            and config.max_position_embeddings < max_length
+        ):
+            dist_print(
+                f"   Updating model config's max_position_embeddings from {config.max_position_embeddings} to {max_length}"
+            )
+            config.max_position_embeddings = max_length
+
+        if length_extension_mode == "yarn_rope_scaling":
+            # Calculate rope_scaling_factor based on args.max_length and the fixed original_model_max_length_for_scaling
+            rope_scaling_factor = max_length / original_model_max_length_for_scaling
+            # original_max_position_embeddings for YaRN config is fixed to 16384
+            yarn_original_max_pos_embed = int(original_model_max_length_for_scaling)
+
+            rope_config = {
+                "type": "yarn",
+                "factor": rope_scaling_factor,
+                "original_max_position_embeddings": yarn_original_max_pos_embed,
+            }
+            config.rope_scaling = rope_config
+            dist_print(
+                f"✅ Applied YaRN RoPE Scaling with calculated factor: {rope_scaling_factor:.4f}, "
+                f"original_max_position_embeddings: {yarn_original_max_pos_embed}"
+            )
+
+        elif length_extension_mode == "sliding_window":
+            # Check if config already had sliding_window before our patch
+            had_sliding_before = hasattr(config, "sliding_window")
+            # sliding_window_size is fixed to 16384
+            config.sliding_window = int(original_model_max_length_for_scaling)
+
+            # Llama-specific monkey-patch
+            if getattr(config, "model_type", None) == "llama":
+                import transformers
+                from liger_kernel.transformers import apply_liger_kernel_to_llama
+                from transformers.models.llama.modeling_llama import LlamaAttention
+
+                apply_liger_kernel_to_llama()
+                _orig_forward = LlamaAttention.forward
+
+                def _sliding_llama_forward(
+                    self,
+                    hidden_states,
+                    position_embeddings,
+                    attention_mask=None,
+                    past_key_value=None,
+                    cache_position=None,
+                    **kwargs,
+                ):
+                    # inject sliding_window into attention kwargs
+                    kwargs["sliding_window"] = self.config.sliding_window
+                    return _orig_forward(
+                        self,
+                        hidden_states,
+                        position_embeddings,
+                        attention_mask,
+                        past_key_value,
+                        cache_position,
+                        **kwargs,
+                    )
+
+                LlamaAttention.forward = _sliding_llama_forward
+                dist_print(
+                    "🪄 Monkey-patched LlamaAttention to support sliding windows"
+                )
+
+            else:
+                # for other models, warn if they did not declare sliding_window originally
+                if not had_sliding_before:
+                    dist_print(
+                        f"⚠️ Model type '{getattr(config, 'model_type', 'unknown')}' "
+                        "did not originally have `sliding_window` support in its config. "
+                        "Please verify that its attention implementation can handle sliding windows."
+                    )
+
+            # Set the attention implementation to flash_attention_2 to ensure compatibility with sliding windows
+            attn_implementation = "flash_attention_2"
+            dist_print(f"✅ Applied Sliding Windows with size: {config.sliding_window}")
+
+        elif length_extension_mode == "none":
+            dist_print(
+                "   Length extension mode is 'none'. No specific scaling or windowing technique applied from script beyond setting max_length."
+            )
+
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name,
+        config=config,
+        trust_remote_code=True,
+        attn_implementation=attn_implementation,
     )
 
     # Ensure pad_token_id is set
@@ -854,7 +972,13 @@ def main() -> None:
     )
 
     # Now initialize model with correct number of labels
-    model = setup_model(args.model_name, args.problem_type, num_labels)
+    model = setup_model(
+        args.model_name,
+        args.problem_type,
+        num_labels,
+        args.max_length,
+        args.length_extension_mode,
+    )
 
     # Train model
     trainer = train_model(model, tokenizer, datasets, args)

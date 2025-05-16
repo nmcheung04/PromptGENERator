@@ -71,6 +71,17 @@ cd GENERator
 pip install -r requirements.txt
 ```
 
+* To support much longer sequence lengths during pre‐training, we recommend installing both [Liger Kernel]( https://github.com/linkedin/Liger-Kernel) and [FlashAttention](https://github.com/Dao-AILab/flash-attention). Remarkably, using sliding‐window attention on just one A100 GPU, we extended the base‐pair (bp) context length to 1 million.
+```shell
+pip install liger-kernel
+pip install flash-attn --no-build-isolation
+```
+
+> If your network cannot access huggingface.co normally, we recommend using the following command to use a mirror:
+> ```shell
+> export HF_ENDPOINT=https://hf-mirror.com
+> ```
+
 ### Pre-train
 
 coming soon...
@@ -175,7 +186,19 @@ torchrun --nnodes=${NUM_NODES} \
     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
     src/tasks/downstream/fine_tuning.py \
     --distributed_type deepspeed # or fsdp
+    
+# Scaling more than 1 million bp context length
+torchrun --nnodes=${NUM_NODES} \
+    --nproc_per_node=${NUM_GPUS_PER_NODE} \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+    src/tasks/downstream/fine_tuning.py \
+    --distributed_type deepspeed \ # or fsdp 
+    --max_len 167000 \
+    --length_extension_mode=sliding_window # or yarn_rope_scaling for better performance (may need sequence parallelism)
 ```
+
+> By using `--length_extension_mode=sliding_window`, you can extend the context length to arbitrary lengths.
 
 ## 📚 Datasets
 
