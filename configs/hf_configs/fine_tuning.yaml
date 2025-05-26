@@ -1,7 +1,7 @@
 # evaluation
-do_eval: true
-eval_strategy: "epoch"
-load_best_model_at_end: true
+do_eval: false
+eval_strategy: 'no'
+load_best_model_at_end: false
 
 # saving
 save_strategy: "epoch"
