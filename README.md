@@ -83,10 +83,6 @@ pip install flash-attn --no-build-isolation
 > export HF_ENDPOINT=https://hf-mirror.com
 > ```
 
-### Pre-train
-
-coming soon...
-
 ### Downstream
 
 #### Variant Effect Prediction
