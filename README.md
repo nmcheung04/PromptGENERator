@@ -7,11 +7,13 @@
 <h1 align="center">GENERator: A Long-Context Generative Genomic Foundation Model</h1>
 
 ## ⚠️ Important Notice
+If you are using **GENERator** for sequence generation, please ensure that the length of each input sequence is a multiple of **6**. This can be achieved by either:  
+1. Padding the sequence on the left with `'A'` (**left padding**);  
+2. Truncating the sequence from the left (**left truncation**).  
 
-An issue was identified in the initial release of [
-`GENERator-eukaryote-1.2b-base`](https://huggingface.co/GenerTeam/GENERator-eukaryote-1.2b-base), likely caused by an
-unstable internet connection during upload. If you downloaded the model before **February 26, 2025**, please re-download
-it to ensure optimal and reliable performance.
+This requirement arises because **GENERator** employs a 6-mer tokenizer. If the input sequence length is not a multiple of **6**, the tokenizer will append an `'<oov>'` (out-of-vocabulary) token to the end of the token sequence. This can result in uninformative subsequent generations, such as repeated `'AAAAAA'`.  
+
+We apologize for any inconvenience this may cause and recommend adhering to the above guidelines to ensure accurate and meaningful generation results.
 
 ## 📰 News
 
