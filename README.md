@@ -48,10 +48,8 @@ In this repository, you will find the following model checkpoints:
 |----------------------------------|:----------:|:-----:|:--------------------------:|:---------------------------------------------------------------------------:|
 | `GENERator-eukaryote-1.2b-base`  |    1.2B    | 386B  |         Eukaryote          | [Available](https://huggingface.co/GenerTeam/GENERator-eukaryote-1.2b-base) |
 | `GENERator-eukaryote-3b-base`    |     3B     | 386B  |         Eukaryote          |  [Available](https://huggingface.co/GenerTeam/GENERator-eukaryote-3b-base)  |
-| `GENERator-eukaryote-7b-base`    |     7B     | 386B  |         Eukaryote          |                                 Coming soon                                 |
-| `GENERator-prokaryote-1.2b-base` |    1.2B    | 715B  |         Prokaryote         | [Available](https://huggingface.co/GenerTeam/GENERator-prokaryote-1.2b-base)|
-| `GENERator-prokaryote-3b-base`   |     3B     | 715B  |         Prokaryote         |  [Available](https://huggingface.co/GenerTeam/GENERator-prokaryote-3b-base) |
-| `GENERator-prokaryote-7b-base`   |     7B     | 715B  |         Prokaryote         |                                 Coming soon                                 |
+| `GENERator-prokaryote-1.2b-base` |    1.2B    | 715B  |         Prokaryote         |                                  Coming Soon                                |
+| `GENERator-prokaryote-3b-base`   |     3B     | 715B  |         Prokaryote         |                                  Coming Soon                                |
 
 ## 📈 Benchmark Performance
 
