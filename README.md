@@ -17,9 +17,9 @@ We apologize for any inconvenience this may cause and recommend adhering to the 
 
 ## 📰 News
 
-* 📑 **[2025-02-12]** Our paper has been made publicly available on [arXiv](https://arxiv.org/abs/2502.07272)!
-* 🤗 **[2025-02-11]** We are pleased to announce that our models `GENERator-eukaryote-1.2b-base`,
-  `GENERator-eukaryote-3b-base` are now available on [Hugging Face](https://huggingface.co/GenerTeam/)!
+* 📑 **[2025-02-12]** Our paper is now available on [arXiv](https://arxiv.org/abs/2502.07272)!
+* 🤗 **[2025-02-11]** Our models `GENERator-eukaryote-1.2b-base`,
+  `GENERator-eukaryote-3b-base` are now available on [HuggingFace](https://huggingface.co/GenerTeam/)!
 
 ## 🔭 Overview
 
@@ -198,7 +198,9 @@ torchrun --nnodes=${NUM_NODES} \
 
 ## 📚 Datasets
 
-* [Gener Tasks](https://huggingface.co/datasets/GenerTeam/gener-tasks)
+* [Eukaryotic Gener Tasks](https://huggingface.co/datasets/GenerTeam/gener-tasks)
+* [Prokaryotic Gener Tasks](https://huggingface.co/datasets/GenerTeam/prokaryotic-gener-tasks)
+* [Next Kmer Prediction](https://huggingface.co/datasets/GenerTeam/next-kmer-prediction)
 
 ## 📜 Citation
 
