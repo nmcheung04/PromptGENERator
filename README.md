@@ -78,7 +78,7 @@ pip install liger-kernel
 pip install flash-attn --no-build-isolation
 ```
 
-> If your network cannot access huggingface.co normally, we recommend using the following command to use a mirror:
+> If your network cannot access huggingface.co normally, we recommend using the following mirror:
 > ```shell
 > export HF_ENDPOINT=https://hf-mirror.com
 > ```
