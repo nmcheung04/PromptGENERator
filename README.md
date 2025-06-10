@@ -151,7 +151,18 @@ torchrun --nnodes=${NUM_NODES} \
     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
     src/tasks/downstream/sequence_understanding.py \
     --distributed_type deepspeed # or fsdp
+
+# Scaling more than 1 million bp context length
+torchrun --nnodes=${NUM_NODES} \
+    --nproc_per_node=${NUM_GPUS_PER_NODE} \
+    --rdzv_backend=c10d \
+    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+    src/tasks/downstream/sequence_understanding.py \
+    --distributed_type deepspeed \ # or fsdp 
+    --max_len 167000 \
+    --length_extension_mode=sliding_window # or yarn_rope_scaling for better performance (may need sequence parallelism)
 ```
+> By using `--length_extension_mode=sliding_window`, you can extend the context length to arbitrary lengths.
 
 #### Causal Language Modeling Fine-tuning
 
@@ -185,19 +196,7 @@ torchrun --nnodes=${NUM_NODES} \
     --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
     src/tasks/downstream/fine_tuning.py \
     --distributed_type deepspeed # or fsdp
-    
-# Scaling more than 1 million bp context length
-torchrun --nnodes=${NUM_NODES} \
-    --nproc_per_node=${NUM_GPUS_PER_NODE} \
-    --rdzv_backend=c10d \
-    --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
-    src/tasks/downstream/fine_tuning.py \
-    --distributed_type deepspeed \ # or fsdp 
-    --max_len 167000 \
-    --length_extension_mode=sliding_window # or yarn_rope_scaling for better performance (may need sequence parallelism)
 ```
-
-> By using `--length_extension_mode=sliding_window`, you can extend the context length to arbitrary lengths.
 
 ## 📚 Datasets
 
