@@ -6,6 +6,7 @@ from typing import Dict, Tuple, Union, Optional, Callable
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.nn as nn
 import transformers
 import yaml
 from datasets import (
@@ -15,8 +16,9 @@ from datasets import (
     IterableDatasetDict,
     IterableDataset,
 )
-from sklearn.metrics import f1_score, matthews_corrcoef
+from sklearn.metrics import f1_score, matthews_corrcoef, roc_auc_score
 from sklearn.model_selection import KFold
+from torch.nn import MSELoss, CrossEntropyLoss, BCEWithLogitsLoss
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
@@ -27,7 +29,11 @@ from transformers import (
     DataCollatorWithPadding,
     PreTrainedModel,
     AutoConfig,
+    LlamaPreTrainedModel,
+    LlamaModel,
+    LlamaConfig,
 )
+from transformers.modeling_outputs import SequenceClassifierOutput
 
 # Set logging level for transformers
 transformers.logging.set_verbosity_info()
@@ -39,6 +45,7 @@ METRICS_DIRECTION: Dict[str, str] = {
     "mcc": "max",
     "f1_max": "max",
     "auprc_micro": "max",
+    "auroc": "max",
     "mse": "min",
     "mae": "min",
     "r2": "max",
@@ -185,14 +192,20 @@ def parse_arguments() -> argparse.Namespace:
         choices=["ddp", "deepspeed", "fsdp"],
         help="Type of distributed training to use",
     )
-
     parser.add_argument(
         "--length_extension_mode",
         type=str,
         default="yarn_rope_scaling",
-        choices=["yarn_rope_scaling", "sliding_window", "none"],
+        choices=["yarn_rope_scaling", "sliding_window", "chunk_ensemble", "none"],
         help="Mode for handling longer sequences when max_length > 16384 * 1.05. "
+        "'chunk_ensemble' splits the sequence, gets representations, and averages them. "
         "'none' means no explicit extension method is applied from this script.",
+    )
+    parser.add_argument(
+        "--chunk_size",
+        type=int,
+        default=8192,
+        help="The sequence length of each chunk for 'chunk_ensemble' mode.",
     )
     return parser.parse_args()
 
@@ -367,24 +380,152 @@ def setup_tokenizer(
     return tokenizer
 
 
+class ChunkEnsembleLlamaForSequenceClassification(LlamaPreTrainedModel):
+    """
+    A Llama-specific sequence classification model that handles long sequences by
+    splitting them into chunks, extracting the EOS embedding from each chunk,
+    concatenating these embeddings to a fixed size, and passing them through a
+    final linear layer for classification.
+    """
+
+    def __init__(
+        self,
+        config: LlamaConfig,
+        chunk_size: int = 4096,
+        overlap_fraction: float = 0,
+        max_chunks: int = 8,
+    ):
+        """
+        Args:
+            config: Model configuration file for Llama.
+            chunk_size: The sequence length of each chunk.
+            overlap_fraction: The fraction of the chunk size to use as overlap.
+            max_chunks: The maximum number of chunks to process. Embeddings will
+                        be padded or truncated to this number to create a fixed-size
+                        input for the final classifier. This is typically inferred from
+                        max_length and chunk_size.
+        """
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.model = LlamaModel(config)
+
+        self.chunk_size = chunk_size
+        self.overlap = int(chunk_size * overlap_fraction)
+        self.stride = self.chunk_size - self.overlap
+        self.max_chunks = max_chunks
+
+        self.classifier = nn.Linear(
+            self.max_chunks * config.hidden_size, self.num_labels, bias=False
+        )
+
+        self.post_init()
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        **kwargs,
+    ) -> Union[Tuple, SequenceClassifierOutput]:
+
+        batch_size, _ = input_ids.shape
+
+        # Use unfold to create sliding window chunks
+        input_ids_chunks = input_ids.unfold(
+            dimension=1, size=self.chunk_size, step=self.stride
+        )
+        attention_mask_chunks = attention_mask.unfold(
+            dimension=1, size=self.chunk_size, step=self.stride
+        )
+
+        num_chunks = input_ids_chunks.shape[1]
+
+        # Process up to max_chunks, ensuring we don't go out of bounds
+        num_chunks_to_process = min(num_chunks, self.max_chunks)
+
+        all_chunk_eos_embeddings = []
+        for i in range(num_chunks_to_process):
+            chunk_input_ids = input_ids_chunks[:, i, :]
+            chunk_attention_mask = attention_mask_chunks[:, i, :]
+
+            outputs = self.model(
+                input_ids=chunk_input_ids,
+                attention_mask=chunk_attention_mask,
+                **kwargs,
+            )
+            hidden_states = outputs.last_hidden_state
+
+            # Find the embedding of the last non-padded token (EOS equivalent)
+            sequence_lengths = torch.sum(chunk_attention_mask, dim=1) - 1
+            chunk_eos_embedding = hidden_states[
+                torch.arange(batch_size, device=hidden_states.device),
+                sequence_lengths,
+            ]
+            all_chunk_eos_embeddings.append(chunk_eos_embedding)
+
+        stacked_embeddings = torch.stack(all_chunk_eos_embeddings, dim=1)
+
+        # Pad the collected embeddings if fewer chunks were processed than max_chunks
+        num_padding_chunks = self.max_chunks - stacked_embeddings.shape[1]
+        if num_padding_chunks > 0:
+            # Pad on the 'chunk' dimension
+            padding = (0, 0, 0, num_padding_chunks) # (pad_left, pad_right, pad_top, pad_bottom) for 4D, but for 3D it's (pad_dim2_start, pad_dim2_end, pad_dim1_start, pad_dim1_end)
+            padded_embeddings = torch.nn.functional.pad(
+                stacked_embeddings, padding, "constant", 0
+            )
+        else:
+            padded_embeddings = stacked_embeddings
+
+        # Flatten the embeddings from all chunks into a single representation
+        final_representation = padded_embeddings.view(batch_size, -1)
+
+        logits = self.classifier(final_representation)
+
+        loss = None
+        if labels is not None:
+            if self.config.problem_type == "regression":
+                loss_fct = MSELoss()
+                loss = (
+                    loss_fct(logits.squeeze(), labels.squeeze())
+                    if self.num_labels == 1
+                    else loss_fct(logits, labels)
+                )
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=None,  # Not returning chunk hidden states for simplicity
+            attentions=None,
+        )
+
+
 def setup_model(
     model_name: str,
     problem_type: str,
     num_labels: int,
-    max_length: Optional[int] = 16384,
-    length_extension_mode: Optional[str] = None,
+    max_length: int,
+    length_extension_mode: str,
+    chunk_size: int,
 ) -> PreTrainedModel:
     """
     Load and configure model for sequence understanding.
 
     Args:
-        model_name: Name or path of the HuggingFace model
-        problem_type: Type of problem
-        num_labels: Number of labels for the task
-        length_extension_mode: Mode for handling sequences longer than 16384 * 1.05 (if applicable)
+        model_name: Name or path of the HuggingFace model.
+        problem_type: Type of problem.
+        num_labels: Number of labels for the task.
+        max_length: Maximum sequence length for tokenization.
+        length_extension_mode: Mode for handling sequences longer than 16384 * 1.05.
+        chunk_size: The sequence length of each chunk for 'chunk_ensemble' mode.
 
     Returns:
-        PreTrainedModel: Configured pre-trained model for sequence classification
+        PreTrainedModel: Configured pre-trained model for sequence classification.
     """
     dist_print(
         f"🤗 Loading AutoModelForSequenceClassification from: {model_name} with {num_labels} labels"
@@ -398,108 +539,145 @@ def setup_model(
         trust_remote_code=True,
     )
     attn_implementation = "sdpa"
+    original_model_max_length_for_scaling = 16384.0
 
-    # Apply length extension configurations if max_length > 16384
-    original_model_max_length_for_scaling = 16384.0  # Using float for division
+    use_chunk_ensemble = (
+        length_extension_mode == "chunk_ensemble"
+        and max_length > original_model_max_length_for_scaling * 1.05
+    )
 
-    if max_length > original_model_max_length_for_scaling * 1.05:
+    if use_chunk_ensemble:
+        if "llama" not in config.model_type.lower():
+            raise ValueError(
+                "Chunk Ensemble mode is currently only supported for Llama-based models."
+            )
+
+        dist_print(f"⚡️ Using Chunk Ensemble mode for Llama model.")
+
+        # Assuming zero overlap, so stride equals chunk_size.
+        calculated_max_chunks = (max_length - chunk_size) // chunk_size + 1
         dist_print(
-            f"⚡️ Max_length ({max_length}) > {int(original_model_max_length_for_scaling)}. Enabling length extension mode: {length_extension_mode}"
+            f"   Inferring max_chunks from max_length ({max_length}) and chunk_size ({chunk_size}) -> {calculated_max_chunks} chunks"
         )
 
-        if (
-            hasattr(config, "max_position_embeddings")
-            and config.max_position_embeddings < max_length
-        ):
-            dist_print(
-                f"   Updating model config's max_position_embeddings from {config.max_position_embeddings} to {max_length}"
-            )
-            config.max_position_embeddings = max_length
+        dist_print(
+            f"✅ Loading model using ChunkEnsembleLlamaForSequenceClassification..."
+        )
 
-        if length_extension_mode == "yarn_rope_scaling":
-            # Calculate rope_scaling_factor based on args.max_length and the fixed original_model_max_length_for_scaling
-            rope_scaling_factor = max_length / original_model_max_length_for_scaling
-            # original_max_position_embeddings for YaRN config is fixed to 16384
-            yarn_original_max_pos_embed = int(original_model_max_length_for_scaling)
+        from liger_kernel.transformers import apply_liger_kernel_to_llama
 
-            rope_config = {
-                "type": "yarn",
-                "factor": rope_scaling_factor,
-                "original_max_position_embeddings": yarn_original_max_pos_embed,
-            }
-            config.rope_scaling = rope_config
+        apply_liger_kernel_to_llama()
+
+        model = ChunkEnsembleLlamaForSequenceClassification.from_pretrained(
+            model_name,
+            config=config,
+            trust_remote_code=True,
+            attn_implementation=attn_implementation,
+            chunk_size=chunk_size,
+            max_chunks=calculated_max_chunks,
+        )
+
+    else:
+
+        if max_length > original_model_max_length_for_scaling * 1.05:
             dist_print(
-                f"✅ Applied YaRN RoPE Scaling with calculated factor: {rope_scaling_factor:.4f}, "
-                f"original_max_position_embeddings: {yarn_original_max_pos_embed}"
+                f"⚡️ Max_length ({max_length}) > {int(original_model_max_length_for_scaling)}. Enabling length extension mode: {length_extension_mode}"
             )
 
-        elif length_extension_mode == "sliding_window":
-            # Check if config already had sliding_window before our patch
-            had_sliding_before = hasattr(config, "sliding_window")
-            # sliding_window_size is fixed to 16384
-            config.sliding_window = int(original_model_max_length_for_scaling)
+            if (
+                hasattr(config, "max_position_embeddings")
+                and config.max_position_embeddings < max_length
+                and length_extension_mode != "chunk_ensemble"
+            ):
+                dist_print(
+                    f"   Updating model config's max_position_embeddings from {config.max_position_embeddings} to {max_length}"
+                )
+                config.max_position_embeddings = max_length
 
-            # Llama-specific monkey-patch
-            if getattr(config, "model_type", None) == "llama":
-                import transformers
-                from liger_kernel.transformers import apply_liger_kernel_to_llama
-                from transformers.models.llama.modeling_llama import LlamaAttention
+            if length_extension_mode == "yarn_rope_scaling":
+                # Calculate rope_scaling_factor based on args.max_length and the fixed original_model_max_length_for_scaling
+                rope_scaling_factor = max_length / original_model_max_length_for_scaling
+                # original_max_position_embeddings for YaRN config is fixed to 16384
+                yarn_original_max_pos_embed = int(original_model_max_length_for_scaling)
 
-                apply_liger_kernel_to_llama()
-                _orig_forward = LlamaAttention.forward
+                rope_config = {
+                    "type": "yarn",
+                    "factor": rope_scaling_factor,
+                    "original_max_position_embeddings": yarn_original_max_pos_embed,
+                }
+                config.rope_scaling = rope_config
+                dist_print(
+                    f"✅ Applied YaRN RoPE Scaling with calculated factor: {rope_scaling_factor:.4f}, "
+                    f"original_max_position_embeddings: {yarn_original_max_pos_embed}"
+                )
 
-                def _sliding_llama_forward(
-                    self,
-                    hidden_states,
-                    position_embeddings,
-                    attention_mask=None,
-                    past_key_value=None,
-                    cache_position=None,
-                    **kwargs,
-                ):
-                    # inject sliding_window into attention kwargs
-                    kwargs["sliding_window"] = self.config.sliding_window
-                    return _orig_forward(
+            elif length_extension_mode == "sliding_window":
+                # Check if config already had sliding_window before our patch
+                had_sliding_before = hasattr(config, "sliding_window")
+                # sliding_window_size is fixed to 16384
+                config.sliding_window = int(original_model_max_length_for_scaling)
+
+                # Llama-specific monkey-patch
+                if getattr(config, "model_type", None) == "llama":
+                    import transformers
+                    from liger_kernel.transformers import apply_liger_kernel_to_llama
+                    from transformers.models.llama.modeling_llama import LlamaAttention
+
+                    apply_liger_kernel_to_llama()
+                    _orig_forward = LlamaAttention.forward
+
+                    def _sliding_llama_forward(
                         self,
                         hidden_states,
                         position_embeddings,
-                        attention_mask,
-                        past_key_value,
-                        cache_position,
+                        attention_mask=None,
+                        past_key_value=None,
+                        cache_position=None,
                         **kwargs,
+                    ):
+                        # inject sliding_window into attention kwargs
+                        kwargs["sliding_window"] = self.config.sliding_window
+                        return _orig_forward(
+                            self,
+                            hidden_states,
+                            position_embeddings,
+                            attention_mask,
+                            past_key_value,
+                            cache_position,
+                            **kwargs,
+                        )
+
+                    LlamaAttention.forward = _sliding_llama_forward
+                    dist_print(
+                        "🪄 Monkey-patched LlamaAttention to support sliding windows"
                     )
 
-                LlamaAttention.forward = _sliding_llama_forward
+                else:
+                    # for other models, warn if they did not declare sliding_window originally
+                    if not had_sliding_before:
+                        dist_print(
+                            f"⚠️ Model type '{getattr(config, 'model_type', 'unknown')}' "
+                            "did not originally have `sliding_window` support in its config. "
+                            "Please verify that its attention implementation can handle sliding windows."
+                        )
+
+                # Set the attention implementation to flash_attention_2 to ensure compatibility with sliding windows
+                attn_implementation = "flash_attention_2"
                 dist_print(
-                    "🪄 Monkey-patched LlamaAttention to support sliding windows"
+                    f"✅ Applied Sliding Windows with size: {config.sliding_window}"
+                )
+            elif length_extension_mode == "none":
+                dist_print(
+                    "   Length extension mode is 'none'. No specific scaling or windowing technique applied from script beyond setting max_length."
                 )
 
-            else:
-                # for other models, warn if they did not declare sliding_window originally
-                if not had_sliding_before:
-                    dist_print(
-                        f"⚠️ Model type '{getattr(config, 'model_type', 'unknown')}' "
-                        "did not originally have `sliding_window` support in its config. "
-                        "Please verify that its attention implementation can handle sliding windows."
-                    )
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            config=config,
+            trust_remote_code=True,
+            attn_implementation=attn_implementation,
+        )
 
-            # Set the attention implementation to flash_attention_2 to ensure compatibility with sliding windows
-            attn_implementation = "flash_attention_2"
-            dist_print(f"✅ Applied Sliding Windows with size: {config.sliding_window}")
-
-        elif length_extension_mode == "none":
-            dist_print(
-                "   Length extension mode is 'none'. No specific scaling or windowing technique applied from script beyond setting max_length."
-            )
-
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_name,
-        config=config,
-        trust_remote_code=True,
-        attn_implementation=attn_implementation,
-    )
-
-    # Ensure pad_token_id is set
     if model.config.pad_token_id is None:
         model.config.pad_token_id = model.config.eos_token_id
 
@@ -531,16 +709,27 @@ def get_compute_metrics_func(problem_type: str, num_labels: int) -> Callable:
             eval_pred: Tuple of (logits, labels)
 
         Returns:
-            Dict of metrics: accuracy, F1 score, and Matthews correlation coefficient
+            Dict of metrics: accuracy, F1 score, Matthews correlation coefficient, and AUROC
         """
         logits, labels = eval_pred
         predictions = np.argmax(logits, axis=-1)
+
+        # Apply softmax to logits to get probabilities
+        probs = torch.nn.functional.softmax(torch.from_numpy(logits), dim=-1).numpy()
 
         accuracy = (predictions == labels).mean()
         f1 = f1_score(labels, predictions, average="weighted")
         mcc = matthews_corrcoef(labels, predictions)
 
-        return {"accuracy": accuracy, "f1_score": f1, "mcc": mcc}
+        # Calculate AUROC
+        if num_labels == 2:
+            # Binary classification: use probabilities of the positive class
+            auroc = roc_auc_score(labels, probs[:, 1])
+        else:
+            # Multi-class classification: use One-vs-Rest strategy
+            auroc = roc_auc_score(labels, probs, multi_class="ovr", average="weighted")
+
+        return {"accuracy": accuracy, "f1_score": f1, "mcc": mcc, "auroc": auroc}
 
     def _compute_metrics_multi_label_classification(eval_pred):
         """
@@ -780,15 +969,15 @@ def setup_training_args(yaml_path=None, cli_args=None, **kwargs):
             )
             cli_args.main_metrics = "mse"
     elif cli_args.problem_type == "single_label_classification":
-        if cli_args.main_metrics not in ["accuracy", "f1_score", "mcc"]:
+        if cli_args.main_metrics not in ["accuracy", "f1_score", "mcc", "auroc"]:
             dist_print(
-                f"⚠️ Warning: {cli_kwargs['main_metrics']} is not a valid metric for single-label classification. Defaulting to 'mcc'."
+                f"⚠️ Warning: {cli_args.main_metrics} is not a valid metric for single-label classification. Defaulting to 'mcc'."
             )
             cli_args.main_metrics = "mcc"
     elif cli_args.problem_type == "multi_label_classification":
         if cli_args.main_metrics not in ["f1_max", "auprc_micro"]:
             dist_print(
-                f"⚠️ Warning: {cli_kwargs['main_metrics']} is not a valid metric for multi-label classification. Defaulting to 'f1_max'."
+                f"⚠️ Warning: {cli_args.main_metrics} is not a valid metric for multi-label classification. Defaulting to 'f1_max'."
             )
             cli_args.main_metrics = "f1_max"
     else:
@@ -975,6 +1164,7 @@ def main() -> None:
         num_labels,
         args.max_length,
         args.length_extension_mode,
+        args.chunk_size,
     )
 
     # Train model
